@@ -362,7 +362,17 @@ done
 if [[ $MODE_T -eq 1 ]]; then
     end_ns=$(date +%s%N)
     elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
-    echo "Elapsed: ${elapsed_ms}ms" >&2
+    if [[ $elapsed_ms -lt 10000 ]]; then
+        # < 10초: 소수점 셋째자리
+        printf 'Elapsed: %d.%03ds\n' "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))" >&2
+    elif [[ $elapsed_ms -lt 60000 ]]; then
+        # 10초 이상 60초 미만: 소수점 첫째자리
+        printf 'Elapsed: %d.%ds\n' "$((elapsed_ms / 1000))" "$((elapsed_ms / 100 % 10))" >&2
+    else
+        # 60초 이상: 정수 분·초
+        total_s=$((elapsed_ms / 1000))
+        printf 'Elapsed: %dm %ds\n' "$((total_s / 60))" "$((total_s % 60))" >&2
+    fi
 fi
 
 # -------- 종료 코드 --------

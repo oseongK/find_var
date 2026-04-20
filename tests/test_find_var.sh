@@ -216,13 +216,14 @@ else
     assert_fail "$n" "fixed string should hit sample.sh"
 fi
 
-# -------- TC9: -t — Elapsed 출력 --------
-n="T9: -t 소요시간"
+# -------- TC9: -t — Elapsed 출력 (새 포맷) --------
+n="T9: -t 소요시간 (초 단위)"
 err=$(run_fv_stderr -t -v aaa)
-if echo "$err" | grep -qE 'Elapsed: [0-9]+ms'; then
+# 가능한 포맷: 'X.XXXs' / 'X.Xs' / 'Nm Ms'
+if echo "$err" | grep -qE 'Elapsed: ([0-9]+\.[0-9]+s|[0-9]+m [0-9]+s)'; then
     assert_pass "$n"
 else
-    assert_fail "$n" "expected 'Elapsed: Nms' on stderr"
+    assert_fail "$n" "expected 'Elapsed: X.XXXs|X.Xs|Nm Ms' on stderr, got: $err"
 fi
 
 # -------- TC10: 옵션 후행 --------
