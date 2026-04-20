@@ -1,0 +1,369 @@
+#!/bin/bash
+# find_var — 병렬 소스 검색 스크립트 (ripgrep 기반)
+# Python/TCL/Perl/bash/csh 의 변수·함수 선언을 병렬로 탐색
+set -u
+
+# =============================================================================
+# ripgrep 실행파일 경로를 아래 따옴표 안에 붙여넣으세요.
+# 비워두면 PATH 에서 'rg' 를 찾습니다.
+# CLI 로는 --rg PATH, 환경변수로는 FIND_VAR_RG 로도 덮어쓸 수 있습니다.
+# 예: DEFAULT_RG="/usr/local/bin/rg"
+# =============================================================================
+DEFAULT_RG=""
+
+# 빈 값이면 PATH 에서 탐색
+[[ -z "$DEFAULT_RG" ]] && DEFAULT_RG="rg"
+
+show_help() {
+    cat <<'EOF'
+find_var — 병렬 소스 검색 스크립트 (ripgrep 기반)
+
+사용법:
+  find_var [옵션] <pattern>
+
+옵션 (위치 무관):
+  -v             <pattern>을 선언 대상 이름으로 해석
+                 (Python/TCL/Perl/bash/csh 의 변수·함수·alias 등 선언 탐지)
+  -E             매칭 라인까지 표시 ([라인번호] 파일경로 : 내용)
+                 미사용시 파일 경로만 출력
+  -t             총 소요 시간 표시 (stderr)
+  -w             -v 와 함께 쓸 때 정확한 이름 일치 (기본은 부분포함)
+  -F             고정 문자열 검색 (기본 regex, -v 와 동시 사용 불가)
+  -j N           동시 실행 워커 수 (기본: nproc)
+  --rg PATH      ripgrep 실행파일 경로 지정
+                 우선순위: --rg > $FIND_VAR_RG > 내장 기본값
+  --color WHEN   색상 제어 (always|auto|never, 기본 auto)
+  -h, --help     이 도움말 출력
+
+예시:
+  find_var aaa                # aaa 를 regex 로 포함한 파일
+  find_var -F 'a.b'           # 고정 문자열 'a.b' 포함 파일
+  find_var -v aaa             # aaa 가 선언된 파일
+  find_var -v -w aaa          # 정확히 'aaa' 로 선언된 파일
+  find_var -v -E aaa          # 선언 라인까지 표시
+  find_var -t -v aaa          # 선언 검색 + 소요시간
+  find_var -j 8 -E aaa        # 워커 8개로 실행
+  find_var aaa -E             # 옵션 후행 가능
+
+환경변수:
+  NO_COLOR       설정 시 색상 강제 비활성
+  FIND_VAR_RG    ripgrep 경로 지정
+EOF
+}
+
+# -------- -h/--help 최우선 감지 --------
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) show_help; exit 0 ;;
+    esac
+done
+
+# -------- 옵션 파싱 --------
+MODE_V=0; MODE_E=0; MODE_T=0; MODE_W=0; MODE_F=0
+JOBS=""; RG_PATH=""; COLOR_WHEN="auto"
+PATTERNS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -v) MODE_V=1; shift ;;
+        -E) MODE_E=1; shift ;;
+        -t) MODE_T=1; shift ;;
+        -w) MODE_W=1; shift ;;
+        -F) MODE_F=1; shift ;;
+        -j)
+            [[ $# -lt 2 ]] && { echo "error: -j requires an argument" >&2; exit 2; }
+            [[ "$2" =~ ^[0-9]+$ ]] || { echo "error: -j value must be a positive integer" >&2; exit 2; }
+            JOBS="$2"; shift 2 ;;
+        --rg)
+            [[ $# -lt 2 ]] && { echo "error: --rg requires a path" >&2; exit 2; }
+            RG_PATH="$2"; shift 2 ;;
+        --color)
+            [[ $# -lt 2 ]] && { echo "error: --color requires a value" >&2; exit 2; }
+            case "$2" in always|auto|never) COLOR_WHEN="$2" ;;
+                *) echo "error: --color must be always|auto|never" >&2; exit 2 ;;
+            esac
+            shift 2 ;;
+        --color=*)
+            v="${1#--color=}"
+            case "$v" in always|auto|never) COLOR_WHEN="$v" ;;
+                *) echo "error: --color must be always|auto|never" >&2; exit 2 ;;
+            esac
+            shift ;;
+        --) shift; while [[ $# -gt 0 ]]; do PATTERNS+=("$1"); shift; done ;;
+        -*) echo "error: unknown option: $1" >&2; exit 2 ;;
+        *) PATTERNS+=("$1"); shift ;;
+    esac
+done
+
+if [[ ${#PATTERNS[@]} -eq 0 ]]; then
+    echo "error: pattern is required. Use -h for help." >&2; exit 2
+elif [[ ${#PATTERNS[@]} -gt 1 ]]; then
+    echo "error: exactly one pattern is required (got ${#PATTERNS[@]})" >&2; exit 2
+fi
+PATTERN="${PATTERNS[0]}"
+
+if [[ $MODE_F -eq 1 && $MODE_V -eq 1 ]]; then
+    echo "error: -F and -v cannot be used together" >&2; exit 2
+fi
+if [[ $MODE_W -eq 1 && $MODE_V -eq 0 ]]; then
+    echo "warning: -w ignored without -v" >&2
+    MODE_W=0
+fi
+
+# -------- rg 경로 --------
+RG="${RG_PATH:-${FIND_VAR_RG:-$DEFAULT_RG}}"
+if [[ "$RG" == */* ]]; then
+    # 경로 지정: 실행 권한 확인
+    if [[ ! -x "$RG" ]]; then
+        echo "error: ripgrep not found or not executable at: $RG" >&2
+        echo "       Set DEFAULT_RG at the top of find_var, use --rg PATH, or set \$FIND_VAR_RG" >&2
+        exit 2
+    fi
+else
+    # 명령 이름만: PATH 에서 탐색
+    if ! command -v "$RG" >/dev/null 2>&1; then
+        echo "error: ripgrep ('$RG') not found in PATH" >&2
+        echo "       Set DEFAULT_RG at the top of find_var, use --rg PATH, or set \$FIND_VAR_RG" >&2
+        exit 2
+    fi
+fi
+
+# -------- 색상 설정 --------
+use_color=0
+case "$COLOR_WHEN" in
+    always) use_color=1 ;;
+    never) use_color=0 ;;
+    auto)
+        if [[ -n "${NO_COLOR:-}" ]]; then use_color=0
+        elif [[ -t 1 ]]; then use_color=1
+        else use_color=0; fi ;;
+esac
+
+if [[ $use_color -eq 1 ]]; then
+    C_BLUE=$'\e[34m'; C_YELLOW=$'\e[33m'
+    C_MAGENTA=$'\e[35m'; C_RED_BOLD=$'\e[1;31m'
+    C_RESET=$'\e[0m'
+else
+    C_BLUE=""; C_YELLOW=""; C_MAGENTA=""; C_RED_BOLD=""; C_RESET=""
+fi
+
+# -------- -v regex 조립 --------
+escape_regex() {
+    printf '%s' "$1" | sed 's#[][(){}.*+?^$|\\/]#\\&#g'
+}
+
+NAME_ESC=""
+RG_PATTERN=""
+REGEX_FLAG=""
+# 식별자 문자 클래스: POSIX 호환 (GNU sed 및 rg 모두 지원)
+ID_CHAR='[[:alnum:]_]'
+
+if [[ $MODE_V -eq 1 ]]; then
+    NAME_ESC=$(escape_regex "$PATTERN")
+    if [[ $MODE_W -eq 1 ]]; then
+        ID="$NAME_ESC"
+    else
+        ID="${ID_CHAR}*${NAME_ESC}${ID_CHAR}*"
+    fi
+    PY1="^\\s*(def|class|global|nonlocal)\\s+${ID}\\b"
+    # PY2: 대입(=) 또는 타입 annotation(:) 이지만 == / :: 는 제외
+    PY2="^\\s*${ID}\\s*(=[^=]|:[^:=])"
+    TCL1="^\\s*(set|variable|global|proc)\\s+${ID}\\b"
+    PL1="^\\s*(my|our|local)\\s*[\$@%]${ID}\\b"
+    PL2="^\\s*sub\\s+${ID}\\b"
+    BASH1="^\\s*(declare|local|export|readonly|typeset)\\s+(-\\S+\\s+)?${ID}=?\\b"
+    BASH2="^\\s*(function\\s+)?${ID}\\s*\\(\\s*\\)"
+    BASH3="^\\s*${ID}="
+    CSH1="^\\s*(set|setenv|alias)\\s+${ID}\\b"
+    RG_PATTERN="(${PY1})|(${PY2})|(${TCL1})|(${PL1})|(${PL2})|(${BASH1})|(${BASH2})|(${BASH3})|(${CSH1})"
+else
+    RG_PATTERN="$PATTERN"
+    [[ $MODE_F -eq 1 ]] && REGEX_FLAG="-F"
+fi
+
+# -------- 타이머 --------
+start_ns=""
+[[ $MODE_T -eq 1 ]] && start_ns=$(date +%s%N)
+
+# -------- 디렉토리 열거 --------
+mapfile -t DIRS < <(find . \
+    \( -type d \( -name '.?*' -o -name 'node_modules' -o -name '__pycache__' -o -name 'build' -o -name 'dist' \) -prune \) \
+    -o \( -type d -print \) \
+    2>/dev/null | sort)
+TOTAL=${#DIRS[@]}
+
+if [[ $TOTAL -eq 0 ]]; then
+    echo "error: no directories to scan" >&2; exit 2
+fi
+
+# -------- 헤더 출력 --------
+SEP_WIDTH=80
+if command -v tput >/dev/null 2>&1; then
+    cols=$(tput cols 2>/dev/null || echo "")
+    [[ -n "$cols" && "$cols" =~ ^[0-9]+$ && "$cols" -ge 20 ]] && SEP_WIDTH=$cols
+fi
+SEP=$(printf '=%.0s' $(seq 1 "$SEP_WIDTH"))
+PWD_ABS="$(pwd)"
+LABEL_W=13
+
+printf '%s%s%s\n' "$C_BLUE" "$SEP" "$C_RESET"
+printf '%s%-*s :%s %s\n' "$C_BLUE" "$LABEL_W" "Pattern"       "$C_RESET" "$PATTERN"
+printf '%s%-*s :%s %s\n' "$C_BLUE" "$LABEL_W" "Directory"     "$C_RESET" "$PWD_ABS"
+printf '%s%-*s :%s %s\n' "$C_BLUE" "$LABEL_W" "Directory num" "$C_RESET" "$TOTAL"
+printf '%s%s%s\n' "$C_BLUE" "$SEP" "$C_RESET"
+
+# -------- 임시 저장 + FIFO --------
+TMP=$(mktemp -d -t find_var.XXXXXX)
+cleanup() { rm -rf "$TMP" 2>/dev/null; }
+trap cleanup EXIT INT TERM
+FIFO="$TMP/progress"
+mkfifo "$FIFO"
+
+# 인덱스 → 디렉토리 매핑
+for i in "${!DIRS[@]}"; do
+    printf '%s\n' "${DIRS[$i]}" > "$TMP/dir.$i"
+done
+
+# -------- 프로그레스 모니터 --------
+MON_PID=""
+if [[ -t 2 ]]; then
+    (
+        done_n=0
+        width=40
+        # FIFO를 r/w로 열어 EOF 없이 유지
+        exec 3<>"$FIFO"
+        while IFS= read -r _ <&3; do
+            done_n=$((done_n + 1))
+            filled=$(( done_n * width / TOTAL ))
+            [[ $filled -gt $width ]] && filled=$width
+            empty=$((width - filled))
+            bar_fill=""
+            bar_empty=""
+            for ((j=0; j<filled; j++)); do bar_fill+="#"; done
+            for ((j=0; j<empty; j++)); do bar_empty+="-"; done
+            pct=$(( done_n * 100 / TOTAL ))
+            printf '\r[%s%s] %d/%d (%d%%)' "$bar_fill" "$bar_empty" "$done_n" "$TOTAL" "$pct" >&2
+            [[ $done_n -ge $TOTAL ]] && break
+        done
+        exec 3<&-
+        # 진행바 지우기
+        printf '\r%*s\r' 70 '' >&2
+    ) &
+    MON_PID=$!
+else
+    # 비TTY: FIFO drain — TOTAL 만큼 읽고 종료
+    (
+        done_n=0
+        exec 3<>"$FIFO"
+        while IFS= read -r _ <&3; do
+            done_n=$((done_n + 1))
+            [[ $done_n -ge $TOTAL ]] && break
+        done
+        exec 3<&-
+    ) &
+    MON_PID=$!
+fi
+
+# -------- 워커 병렬 실행 --------
+if [[ $MODE_E -eq 1 ]]; then
+    RG_OUT_MODE="-n --no-heading --color=never"
+else
+    RG_OUT_MODE="-l --color=never"
+fi
+
+export RG TMP FIFO REGEX_FLAG RG_OUT_MODE RG_PATTERN MODE_E
+
+scan_one() {
+    local idx="$1"
+    local d; d=$(cat "$TMP/dir.$idx")
+    local out="$TMP/out.$idx"
+    # shellcheck disable=SC2086
+    if [[ -n "$REGEX_FLAG" ]]; then
+        "$RG" $RG_OUT_MODE --no-follow --max-depth 1 --threads 1 "$REGEX_FLAG" -e "$RG_PATTERN" "$d" > "$out" 2>/dev/null
+    else
+        "$RG" $RG_OUT_MODE --no-follow --max-depth 1 --threads 1 -e "$RG_PATTERN" "$d" > "$out" 2>/dev/null
+    fi
+    printf 'done\n' >> "$FIFO"
+}
+export -f scan_one
+
+JOBS_USE="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
+seq 0 $((TOTAL - 1)) | xargs -P "$JOBS_USE" -I{} bash -c 'scan_one "$@"' _ {}
+
+# 모니터 종료 대기 (모든 이벤트 처리될 때까지)
+wait "$MON_PID" 2>/dev/null || true
+
+# -------- 라인번호 최대 폭 계산 (-E 용) --------
+max_line_width=1
+if [[ $MODE_E -eq 1 ]]; then
+    m=$(awk -F: '{ if (length($2) > m) m = length($2) } END { print m+0 }' "$TMP"/out.* 2>/dev/null)
+    [[ -n "$m" && "$m" -gt 0 ]] && max_line_width=$m
+fi
+
+# -------- 하이라이트 대상 패턴 (sed ERE 용) --------
+hl_pattern=""
+if [[ $use_color -eq 1 ]]; then
+    if [[ $MODE_V -eq 1 ]]; then
+        if [[ $MODE_W -eq 1 ]]; then
+            hl_pattern="${NAME_ESC}"
+        else
+            hl_pattern="${ID_CHAR}*${NAME_ESC}${ID_CHAR}*"
+        fi
+    elif [[ $MODE_F -eq 1 ]]; then
+        hl_pattern=$(printf '%s' "$PATTERN" | sed 's#[][(){}.*+?^$|\\/]#\\&#g')
+    else
+        hl_pattern="$PATTERN"
+    fi
+fi
+
+apply_highlight() {
+    if [[ $use_color -eq 1 && -n "$hl_pattern" ]]; then
+        sed -E "s/(${hl_pattern})/${C_RED_BOLD}\\1${C_RESET}/g"
+    else
+        cat
+    fi
+}
+
+format_e_line() {
+    awk -v c_mag="$C_MAGENTA" -v c_rst="$C_RESET" -v w="$max_line_width" -F: '
+    {
+        path=$1; ln=$2
+        content=""
+        for (i=3; i<=NF; i++) {
+            if (i>3) content = content ":"
+            content = content $i
+        }
+        printf "%s[%*s]%s %s : %s\n", c_mag, w, ln, c_rst, path, content
+    }'
+}
+
+# -------- 결과 머지 (폴더별 그룹) --------
+any_match=0
+first_group=1
+for i in $(seq 0 $((TOTAL - 1))); do
+    out="$TMP/out.$i"
+    [[ -f "$out" && -s "$out" ]] || continue
+    dir=$(cat "$TMP/dir.$i")
+    # grep -c '' 은 wc -l 과 달리 마지막 개행 없는 라인도 카운트
+    count=$(grep -c '' < "$out" 2>/dev/null || echo 0)
+    [[ $count -eq 0 ]] && continue
+    any_match=1
+    [[ $first_group -eq 0 ]] && echo
+    printf '%s---[%s]--- Matches : %d%s\n' "$C_YELLOW" "$dir" "$count" "$C_RESET"
+    if [[ $MODE_E -eq 1 ]]; then
+        sort -t: -k1,1 -k2,2n "$out" | format_e_line | apply_highlight
+    else
+        sort -u "$out"
+    fi
+    first_group=0
+done
+
+# -------- 소요 시간 --------
+if [[ $MODE_T -eq 1 ]]; then
+    end_ns=$(date +%s%N)
+    elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+    echo "Elapsed: ${elapsed_ms}ms" >&2
+fi
+
+# -------- 종료 코드 --------
+[[ $any_match -eq 1 ]] && exit 0 || exit 1
