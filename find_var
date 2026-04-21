@@ -14,6 +14,17 @@ DEFAULT_RG=""
 # 빈 값이면 PATH 에서 탐색
 [[ -z "$DEFAULT_RG" ]] && DEFAULT_RG="rg"
 
+# =============================================================================
+# -v 옵션 사용 시 제외할 폴더 목록 (하위 폴더 포함해 모두 제외)
+# 상대경로("./foo")·절대경로 모두 허용. 나중에 아래 배열에 줄을 추가하세요.
+# FIND_VAR_V_EXCLUDE 환경변수(":"구분) 로 추가 경로 주입 가능.
+# =============================================================================
+V_EXCLUDE_DIRS=(
+    # "./vendor"
+    # "./third_party"
+    # "/abs/path/to/skip"
+)
+
 show_help() {
     cat <<'EOF'
 find_var — 병렬 소스 검색 스크립트 (ripgrep 기반)
@@ -191,6 +202,45 @@ mapfile -t DIRS < <(find . \
     -o \( -type d -print \) \
     2>/dev/null | sort)
 TOTAL=${#DIRS[@]}
+
+# -v 모드에서 V_EXCLUDE_DIRS + 환경변수 적용
+if [[ $MODE_V -eq 1 ]]; then
+    # 환경변수에서 추가 경로 읽기
+    if [[ -n "${FIND_VAR_V_EXCLUDE:-}" ]]; then
+        IFS=':' read -r -a _env_excl <<< "$FIND_VAR_V_EXCLUDE"
+        V_EXCLUDE_DIRS+=("${_env_excl[@]}")
+    fi
+
+    # 제외 경로를 절대경로로 정규화
+    CANONICAL_EXCLUDES=()
+    for _ex in "${V_EXCLUDE_DIRS[@]:-}"; do
+        [[ -z "$_ex" ]] && continue
+        _ex="${_ex%/}"
+        if [[ "$_ex" == /* ]]; then
+            CANONICAL_EXCLUDES+=("$_ex")
+        else
+            _abs=$(cd "$_ex" 2>/dev/null && pwd)
+            [[ -n "$_abs" ]] && CANONICAL_EXCLUDES+=("$_abs")
+        fi
+    done
+
+    # DIRS 필터링
+    if [[ ${#CANONICAL_EXCLUDES[@]} -gt 0 ]]; then
+        _filtered=()
+        for _d in "${DIRS[@]}"; do
+            _d_abs=$(cd "$_d" 2>/dev/null && pwd) || _d_abs="$_d"
+            _skip=0
+            for _ex in "${CANONICAL_EXCLUDES[@]}"; do
+                if [[ "$_d_abs" == "$_ex" || "$_d_abs" == "$_ex"/* ]]; then
+                    _skip=1; break
+                fi
+            done
+            [[ $_skip -eq 0 ]] && _filtered+=("$_d")
+        done
+        DIRS=("${_filtered[@]}")
+        TOTAL=${#DIRS[@]}
+    fi
+fi
 
 if [[ $TOTAL -eq 0 ]]; then
     echo "error: no directories to scan" >&2; exit 2

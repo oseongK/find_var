@@ -327,6 +327,50 @@ else
     assert_pass "$n"
 fi
 
+# -------- TC23: -v V_EXCLUDE_DIRS (FIND_VAR_V_EXCLUDE) --------
+# fixture 에 excl/sample.py 추가 후 환경변수로 제외 확인
+mkdir -p "$FIX/excl"
+cat > "$FIX/excl/sample.py" <<'PY'
+def aaa():
+    pass
+PY
+
+n="T23: FIND_VAR_V_EXCLUDE 로 폴더 제외"
+# 기준: 제외 없을 때 excl/sample.py 포함
+out_all=$("$FV" "${RG_ARG[@]}" --color=never -v aaa 2>/dev/null)
+# 환경변수로 ./excl 제외
+out_excl=$(FIND_VAR_V_EXCLUDE="./excl" "$FV" "${RG_ARG[@]}" --color=never -v aaa 2>/dev/null)
+
+if echo "$out_all" | grep -q 'excl/sample.py' \
+    && ! echo "$out_excl" | grep -q 'excl/sample.py'; then
+    assert_pass "$n"
+else
+    assert_fail "$n" "excl/sample.py should appear without exclusion and disappear with it"
+fi
+
+# -------- TC24: -v 제외는 하위 폴더까지 포함 --------
+mkdir -p "$FIX/excl/nested"
+cat > "$FIX/excl/nested/deep.sh" <<'SH'
+aaa=10
+SH
+
+n="T24: 제외 경로의 하위 폴더도 제외"
+out_excl=$(FIND_VAR_V_EXCLUDE="./excl" "$FV" "${RG_ARG[@]}" --color=never -v aaa 2>/dev/null)
+if echo "$out_excl" | grep -q 'excl/nested'; then
+    assert_fail "$n" "nested subdir should also be excluded"
+else
+    assert_pass "$n"
+fi
+
+# -------- TC25: -v 제외 경로는 일반 검색에 영향 없음 --------
+n="T25: 제외 경로는 -v 없을 때 영향 없음"
+out_plain=$(FIND_VAR_V_EXCLUDE="./excl" "$FV" "${RG_ARG[@]}" --color=never 'aaa' 2>/dev/null)
+if echo "$out_plain" | grep -q 'excl/sample.py'; then
+    assert_pass "$n"
+else
+    assert_fail "$n" "exclusion should only apply to -v mode"
+fi
+
 # -------- TC22: 매치 없음 → exit 1 --------
 n="T22: 매치 없음 → exit 1"
 run_fv -v zzz_nonexistent_xyz123 >/dev/null 2>&1

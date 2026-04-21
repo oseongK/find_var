@@ -32,6 +32,24 @@ DEFAULT_RG="/your/path/to/rg"
 
 우선순위: `--rg` > `$FIND_VAR_RG` > `DEFAULT_RG`
 
+### -v 전용 제외 폴더
+
+`-v` 로 선언 검색 시 아예 스캔하고 싶지 않은 폴더가 있으면 스크립트 상단 `V_EXCLUDE_DIRS` 배열에 추가하세요. 하위 폴더 포함해 제외됩니다. (일반 검색에는 영향 없음)
+
+```bash
+# find_var 상단
+V_EXCLUDE_DIRS=(
+    "./vendor"
+    "./third_party/generated"
+    "/some/absolute/path"
+)
+```
+
+환경변수 `FIND_VAR_V_EXCLUDE` (`:` 구분) 로 일시적 추가도 가능:
+```bash
+FIND_VAR_V_EXCLUDE="./tmp:./legacy" find_var -v aaa
+```
+
 ## 사용법
 
 ```
@@ -56,6 +74,7 @@ find_var [옵션] <pattern>
 
 - `NO_COLOR` — 설정 시 색상 강제 비활성 (업계 표준)
 - `FIND_VAR_RG` — ripgrep 경로 지정 (우선순위: `--rg` > `$FIND_VAR_RG` > 내장 기본값)
+- `FIND_VAR_V_EXCLUDE` — `-v` 모드에서 제외할 폴더 (`:` 구분, 스크립트 내 `V_EXCLUDE_DIRS` 에 추가됨)
 
 ### 예시
 
