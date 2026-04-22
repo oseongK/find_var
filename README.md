@@ -65,6 +65,7 @@ find_var [옵션] <pattern>
 | `-t` | 총 소요 시간 표시 (stderr). <10초: `X.XXXs`, 10~60초: `X.Xs`, 60초~: `Nm Ms` |
 | `-w` | `-v` 와 함께: 정확한 이름 일치 (기본은 부분포함) |
 | `-F` | 고정 문자열 검색 (기본 regex, `-v` 와 동시 사용 불가) |
+| `-zip` | `.gz`/`.bz2`/`.xz`/`.zst`/`.lz4` 압축 파일 내부까지 검색 (기본 OFF) |
 | `-j N` | 동시 실행 워커 수 (기본: `nproc`) |
 | `--rg PATH` | ripgrep 실행파일 경로 지정 |
 | `--color WHEN` | 색상 제어 (`always`/`auto`/`never`, 기본 `auto`) |
@@ -135,7 +136,7 @@ Directory num : 47
 - 심볼릭 링크 따라가지 않음
 - 숨김 디렉토리 제외 (`.git`, `.svn`, `.cache` 등)
 - 빌드/의존성 제외: `node_modules`, `__pycache__`, `build`, `dist`
-- **압축 파일 자동 스캔**: `.gz`, `.bz2`, `.xz`, `.zst`, `.lz4` 내부까지 검색 (rg `--search-zip`)
+- **압축 파일 검색은 기본 OFF** — `.gz`/`.bz2`/`.xz`/`.zst`/`.lz4` 내부까지 보려면 `-zip` 옵션 필요 (디코딩이 CPU·디스크에 큰 부하)
 
 ## 종료 코드
 

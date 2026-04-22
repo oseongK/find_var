@@ -371,16 +371,25 @@ else
     assert_fail "$n" "exclusion should only apply to -v mode"
 fi
 
-# -------- TC26: .gz 압축 파일 내부 검색 --------
+# -------- TC26: .gz 기본은 검색 안 함 --------
 mkdir -p "$FIX/compressed"
 printf 'def aaa():\n    pass\n' | gzip > "$FIX/compressed/sample.py.gz"
 
-n="T26: .gz 파일 내부 aaa 선언 검색"
+n="T26: .gz 파일 기본은 스캔 안 함"
 out=$(run_fv -v aaa)
+if echo "$out" | grep -q 'compressed/sample.py.gz'; then
+    assert_fail "$n" ".gz should be skipped without -zip"
+else
+    assert_pass "$n"
+fi
+
+# -------- TC27: -zip 옵션 시 .gz 내부까지 검색 --------
+n="T27: -zip 으로 .gz 파일 검색"
+out=$(run_fv -zip -v aaa)
 if echo "$out" | grep -q 'compressed/sample.py.gz'; then
     assert_pass "$n"
 else
-    assert_fail "$n" ".gz file content should be searchable"
+    assert_fail "$n" "-zip should enable .gz search"
 fi
 
 # -------- TC22: 매치 없음 → exit 1 --------

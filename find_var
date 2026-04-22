@@ -40,6 +40,8 @@ find_var — 병렬 소스 검색 스크립트 (ripgrep 기반)
   -t             총 소요 시간 표시 (stderr)
   -w             -v 와 함께 쓸 때 정확한 이름 일치 (기본은 부분포함)
   -F             고정 문자열 검색 (기본 regex, -v 와 동시 사용 불가)
+  -zip           .gz/.bz2/.xz/.zst/.lz4 압축 파일 내부까지 검색
+                 (기본 OFF — 디코딩 부하가 크므로 필요할 때만)
   -j N           동시 실행 워커 수 (기본: nproc)
   --rg PATH      ripgrep 실행파일 경로 지정
                  우선순위: --rg > $FIND_VAR_RG > 내장 기본값
@@ -54,6 +56,7 @@ find_var — 병렬 소스 검색 스크립트 (ripgrep 기반)
   find_var -v -E aaa          # 선언 라인까지 표시
   find_var -t -v aaa          # 선언 검색 + 소요시간
   find_var -j 8 -E aaa        # 워커 8개로 실행
+  find_var -zip -v aaa        # 압축 파일 내부까지 검색
   find_var aaa -E             # 옵션 후행 가능
 
 환경변수:
@@ -70,7 +73,7 @@ for arg in "$@"; do
 done
 
 # -------- 옵션 파싱 --------
-MODE_V=0; MODE_E=0; MODE_T=0; MODE_W=0; MODE_F=0
+MODE_V=0; MODE_E=0; MODE_T=0; MODE_W=0; MODE_F=0; MODE_ZIP=0
 JOBS=""; RG_PATH=""; COLOR_WHEN="auto"
 PATTERNS=()
 
@@ -81,6 +84,7 @@ while [[ $# -gt 0 ]]; do
         -t) MODE_T=1; shift ;;
         -w) MODE_W=1; shift ;;
         -F) MODE_F=1; shift ;;
+        -zip) MODE_ZIP=1; shift ;;
         -j)
             [[ $# -lt 2 ]] && { echo "error: -j requires an argument" >&2; exit 2; }
             [[ "$2" =~ ^[0-9]+$ ]] || { echo "error: -j value must be a positive integer" >&2; exit 2; }
@@ -321,18 +325,21 @@ else
     RG_OUT_MODE="-l --color=never"
 fi
 
-export RG TMP FIFO REGEX_FLAG RG_OUT_MODE RG_PATTERN MODE_E
+ZIP_FLAG=""
+[[ $MODE_ZIP -eq 1 ]] && ZIP_FLAG="--search-zip"
+
+export RG TMP FIFO REGEX_FLAG RG_OUT_MODE RG_PATTERN MODE_E ZIP_FLAG
 
 scan_one() {
     local idx="$1"
     local d; d=$(cat "$TMP/dir.$idx")
     local out="$TMP/out.$idx"
     # shellcheck disable=SC2086
-    # --search-zip: .gz/.bz2/.xz/.zst 등 압축 파일 내부도 검색
+    # ZIP_FLAG: -zip 옵션 사용 시 .gz/.bz2/.xz/.zst 등 압축 파일 내부도 검색
     if [[ -n "$REGEX_FLAG" ]]; then
-        "$RG" $RG_OUT_MODE --no-follow --max-depth 1 --threads 1 --search-zip "$REGEX_FLAG" -e "$RG_PATTERN" "$d" > "$out" 2>/dev/null
+        "$RG" $RG_OUT_MODE --no-follow --max-depth 1 --threads 1 $ZIP_FLAG "$REGEX_FLAG" -e "$RG_PATTERN" "$d" > "$out" 2>/dev/null
     else
-        "$RG" $RG_OUT_MODE --no-follow --max-depth 1 --threads 1 --search-zip -e "$RG_PATTERN" "$d" > "$out" 2>/dev/null
+        "$RG" $RG_OUT_MODE --no-follow --max-depth 1 --threads 1 $ZIP_FLAG -e "$RG_PATTERN" "$d" > "$out" 2>/dev/null
     fi
     printf 'done\n' >> "$FIFO"
 }
