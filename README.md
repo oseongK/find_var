@@ -135,6 +135,7 @@ Directory num : 47
 - 심볼릭 링크 따라가지 않음
 - 숨김 디렉토리 제외 (`.git`, `.svn`, `.cache` 등)
 - 빌드/의존성 제외: `node_modules`, `__pycache__`, `build`, `dist`
+- **압축 파일 자동 스캔**: `.gz`, `.bz2`, `.xz`, `.zst`, `.lz4` 내부까지 검색 (rg `--search-zip`)
 
 ## 종료 코드
 

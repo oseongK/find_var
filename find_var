@@ -328,10 +328,11 @@ scan_one() {
     local d; d=$(cat "$TMP/dir.$idx")
     local out="$TMP/out.$idx"
     # shellcheck disable=SC2086
+    # --search-zip: .gz/.bz2/.xz/.zst 등 압축 파일 내부도 검색
     if [[ -n "$REGEX_FLAG" ]]; then
-        "$RG" $RG_OUT_MODE --no-follow --max-depth 1 --threads 1 "$REGEX_FLAG" -e "$RG_PATTERN" "$d" > "$out" 2>/dev/null
+        "$RG" $RG_OUT_MODE --no-follow --max-depth 1 --threads 1 --search-zip "$REGEX_FLAG" -e "$RG_PATTERN" "$d" > "$out" 2>/dev/null
     else
-        "$RG" $RG_OUT_MODE --no-follow --max-depth 1 --threads 1 -e "$RG_PATTERN" "$d" > "$out" 2>/dev/null
+        "$RG" $RG_OUT_MODE --no-follow --max-depth 1 --threads 1 --search-zip -e "$RG_PATTERN" "$d" > "$out" 2>/dev/null
     fi
     printf 'done\n' >> "$FIFO"
 }

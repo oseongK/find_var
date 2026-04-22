@@ -371,6 +371,18 @@ else
     assert_fail "$n" "exclusion should only apply to -v mode"
 fi
 
+# -------- TC26: .gz 압축 파일 내부 검색 --------
+mkdir -p "$FIX/compressed"
+printf 'def aaa():\n    pass\n' | gzip > "$FIX/compressed/sample.py.gz"
+
+n="T26: .gz 파일 내부 aaa 선언 검색"
+out=$(run_fv -v aaa)
+if echo "$out" | grep -q 'compressed/sample.py.gz'; then
+    assert_pass "$n"
+else
+    assert_fail "$n" ".gz file content should be searchable"
+fi
+
 # -------- TC22: 매치 없음 → exit 1 --------
 n="T22: 매치 없음 → exit 1"
 run_fv -v zzz_nonexistent_xyz123 >/dev/null 2>&1
